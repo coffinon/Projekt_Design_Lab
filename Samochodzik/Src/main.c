@@ -17,17 +17,16 @@
   ******************************************************************************
   */
 /* USER CODE END Header */
-
 /* Includes ------------------------------------------------------------------*/
 #include "main.h"
-#include "dma.h"
 #include "tim.h"
 #include "usart.h"
 #include "gpio.h"
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
-
+#include "spi.h"
+#include "carHandler.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -36,28 +35,33 @@
 
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
-#define MCP_IODIR 		0x00
-#define MCP_IPOL 		0x01
-#define MCP_GPINTEN		0x02
-#define MCP_DEFVAL 		0x03
-#define MCP_INTCON 		0x04
-#define MCP_IOCON 		0x05
-#define MCP_GPPU 		0x06
-#define MCP_INTF 		0x07
-#define MCP_INTCAP 		0x08
-#define MCP_GPIO 		0x09
-#define MCP_OLAT 		0x0A
-
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
 /* USER CODE BEGIN PM */
-
 /* USER CODE END PM */
 
 /* Private variables ---------------------------------------------------------*/
 
 /* USER CODE BEGIN PV */
+
+volatile State state = RESTING;
+
+//UART variable
+uint8_t received;
+
+uint8_t forwardCounter = 0;
+uint8_t backwardCounter = 0;
+uint8_t rightTurningCounter = 0;
+uint8_t leftTurningCounter = 0;
+uint8_t lightsBrightness = 0;
+
+// light ticks handle
+uint8_t isRightLightActive=0;
+uint8_t isLeftLightActive=0;
+
+uint8_t isRightOn =0;
+uint8_t isLeftOn =0;
 
 /* USER CODE END PV */
 
@@ -70,32 +74,7 @@ void SystemClock_Config(void);
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
 
-void MCP_Write_Reg(uint8_t addr, uint8_t value)
-{
-	uint8_t tx_buf[] = {0x40, addr, value};
 
-	GPIOA->ODR &= ~GPIO_ODR_ODR0;
-
-	while( !(SPI1->SR & SPI_SR_TXE) );
-	SPI1->DR = tx_buf[0];
-	while( !(SPI1->SR & SPI_SR_TXE) );
-	SPI1->DR = tx_buf[1];
-	while( !(SPI1->SR & SPI_SR_TXE) );
-	SPI1->DR = tx_buf[2];
-
-	GPIOA->ODR |= GPIO_ODR_ODR0;
-}
-
-void Andzej_SPI_Init()
-{
-	RCC->APB2ENR = RCC_APB2ENR_IOPAEN | RCC_APB2ENR_SPI1EN;
-
-	GPIOA->CRL |= GPIO_CRL_MODE0_0 + GPIO_CRL_MODE5_0 + GPIO_CRL_MODE7_0;
-	GPIOA->CRL &= ~(GPIO_CRL_CNF0_0 + GPIO_CRL_CNF5_0 + GPIO_CRL_CNF6_0 + GPIO_CRL_CNF7_0);
-	GPIOA->CRL |= GPIO_CRL_CNF5_1 + GPIO_CRL_CNF6_1 + GPIO_CRL_CNF7_1;
-
-	SPI1->CR1 = SPI_CR1_SSM | SPI_CR1_SSI | SPI_CR1_SPE | SPI_CR1_MSTR;
-}
 /* USER CODE END 0 */
 
 /**
@@ -126,45 +105,61 @@ int main(void)
 
   /* Initialize all configured peripherals */
   MX_GPIO_Init();
-  MX_DMA_Init();
   MX_TIM1_Init();
   MX_USART2_UART_Init();
+  MX_TIM2_Init();
   /* USER CODE BEGIN 2 */
-
-  //HAL_TIM_PWM_Start(&htim1, TIM_CHANNEL_1);
+  HAL_TIM_Base_Start_IT(&htim1);
+  HAL_TIM_PWM_Start(&htim1, TIM_CHANNEL_1);
   HAL_TIM_PWM_Start(&htim1, TIM_CHANNEL_2);
+  HAL_TIM_PWM_Start(&htim1, TIM_CHANNEL_3);
   Andzej_SPI_Init();
   MCP_Write_Reg(MCP_IODIR, ~0x03);
+  HAL_UART_Receive_IT(&huart2, &received, 1);
 
-  TIM1->CCR1 = 100;
-  HAL_GPIO_WritePin(GPIOC, GPIO_PIN_0, GPIO_PIN_RESET);
-  HAL_GPIO_WritePin(GPIOC, GPIO_PIN_1, GPIO_PIN_RESET);
-
-  TIM1->CCR2 = 100;
-  HAL_GPIO_WritePin(GPIOC, GPIO_PIN_2, GPIO_PIN_RESET);
-  HAL_GPIO_WritePin(GPIOC, GPIO_PIN_3, GPIO_PIN_RESET);
-  HAL_Delay(1000);
-
+  HAL_TIM_Base_Start_IT(&htim2);
   /* USER CODE END 2 */
 
   /* Infinite loop */
   /* USER CODE BEGIN WHILE */
   while (1)
   {
-	  //HAL_GPIO_WritePin(GPIOC, GPIO_PIN_1, GPIO_PIN_SET);
-	  /*HAL_Delay(1000);
-	  MCP_Write_Reg(MCP_OLAT, 0x01);
-	  HAL_Delay(1000);
-	  MCP_Write_Reg(MCP_OLAT, 0x00);
-	  HAL_GPIO_WritePin(GPIOC, GPIO_PIN_1, GPIO_PIN_RESET);*/
 
-	  HAL_GPIO_WritePin(GPIOC, GPIO_PIN_2, GPIO_PIN_SET);
-	  HAL_Delay(1000);
-	  /*MCP_Write_Reg(MCP_OLAT, 0x02);
-	  HAL_Delay(1000);
-	  MCP_Write_Reg(MCP_OLAT, 0x00);*/
-	  HAL_GPIO_WritePin(GPIOC, GPIO_PIN_2, GPIO_PIN_RESET);
-	  HAL_Delay(1000);
+	  switch(state)
+	 	  {
+	  	  	  case RESTING:
+	  			  WaitForAction();
+	  			  break;
+	  		  case RESETTING:
+	  			  Reset();
+	  			  break;
+	 		  case GO_FORWARD:
+	 			  GoForward();
+	 			  break;
+	 		  case GO_BACKWARD:
+	 			  GoBackward();
+	 			  break;
+	 		  case TURN_RIGHT:
+	 			  TurnRight();
+	 			  break;
+	 		  case TURN_LEFT:
+	 			  TurnLeft();
+	 			  break;
+	 		  case HORN:
+	 			  Horn();
+	 			  break;
+	 		  case FRONT_LIGHTS_BRIGHTNESS_CHANGE:
+	 			  AdjustBrightness();
+	 			  break;
+	 		  case LIGHTS_ON:
+	 			  LightsOn();
+	 			  break;
+	 		  case LIGHTS_OFF:
+	 			  LightsOff();
+	 			  break;
+	 	  }
+
+
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
@@ -181,7 +176,8 @@ void SystemClock_Config(void)
   RCC_OscInitTypeDef RCC_OscInitStruct = {0};
   RCC_ClkInitTypeDef RCC_ClkInitStruct = {0};
 
-  /** Initializes the CPU, AHB and APB busses clocks 
+  /** Initializes the RCC Oscillators according to the specified parameters
+  * in the RCC_OscInitTypeDef structure.
   */
   RCC_OscInitStruct.OscillatorType = RCC_OSCILLATORTYPE_HSI;
   RCC_OscInitStruct.HSIState = RCC_HSI_ON;
@@ -193,7 +189,7 @@ void SystemClock_Config(void)
   {
     Error_Handler();
   }
-  /** Initializes the CPU, AHB and APB busses clocks 
+  /** Initializes the CPU, AHB and APB buses clocks
   */
   RCC_ClkInitStruct.ClockType = RCC_CLOCKTYPE_HCLK|RCC_CLOCKTYPE_SYSCLK
                               |RCC_CLOCKTYPE_PCLK1|RCC_CLOCKTYPE_PCLK2;
@@ -210,6 +206,83 @@ void SystemClock_Config(void)
 
 /* USER CODE BEGIN 4 */
 
+void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart)
+{
+
+	if(received == GO_FORWARD_CHAR)
+	{
+		state = GO_FORWARD;
+		forwardCounter++;
+		if (forwardCounter > SPEED_MAX_LEVEL) forwardCounter = 0;
+	}
+	else if(received == GO_BACKWARD_CHAR)
+	{
+		state = GO_BACKWARD;
+		backwardCounter++;
+		if (backwardCounter > SPEED_MAX_LEVEL) backwardCounter = 0;
+	}
+	else if(received == RESET_CHAR)
+		{
+			state = RESETTING;
+		}
+	else if(received == TURN_RIGHT_CHAR )
+	{
+		state = TURN_RIGHT;
+		rightTurningCounter++;
+		if (rightTurningCounter > TURNING_MAX_LEVEL) rightTurningCounter = 0;
+	}
+	else if(received == TURN_LEFT_CHAR )
+	{
+		state = TURN_LEFT;
+		leftTurningCounter++;
+		if (leftTurningCounter > TURNING_MAX_LEVEL) leftTurningCounter = 0;
+	}
+	else if(received == HORN_CHAR )
+		state = HORN;
+	else if(received == ADJUST_BRIGHTNESS_CHAR )
+	{
+		state = FRONT_LIGHTS_BRIGHTNESS_CHANGE;
+		lightsBrightness++;
+		if (lightsBrightness > 1) lightsBrightness = 0;
+	}
+	else if(received == LIGHTS_ON_CHAR  )
+		state = LIGHTS_ON;
+	else if(received == LIGHTS_OFF_CHAR  )
+		state = LIGHTS_OFF;
+	else if(received == DO_NOTHING_CHAR  )
+		state = RESTING;
+	else if(received == LEFT_LIGHT_CHAR)
+		{
+			isRightLightActive = 0;
+			if (isLeftLightActive == 0) isLeftLightActive = 1;
+			else isLeftLightActive = 0;
+		}
+	else if(received == RIGHT_LIGHT_CHAR  )
+		{
+			isLeftLightActive = 0;
+			if (isRightLightActive == 0) isRightLightActive = 1;
+			else isRightLightActive = 0;
+		}
+	HAL_UART_Receive_IT(&huart2, &received, 1); // Ponowne włączenie nasłuchiwania
+}
+void RightLight()
+{
+	 //dioda SPI 1
+	if (isRightOn==1)
+		MCP_Write_Reg(MCP_OLAT, 0x01);//right turn on
+	else
+		MCP_Write_Reg(MCP_OLAT, 0x00);
+}
+
+void LeftLight()
+{
+	//dioda SPI 2
+	if (isLeftOn==1)
+		MCP_Write_Reg(MCP_OLAT, 0x02); //left turn on
+	else
+		MCP_Write_Reg(MCP_OLAT, 0x00);
+
+}
 /* USER CODE END 4 */
 
 /**
@@ -233,7 +306,7 @@ void Error_Handler(void)
   * @retval None
   */
 void assert_failed(uint8_t *file, uint32_t line)
-{ 
+{
   /* USER CODE BEGIN 6 */
   /* User can add his own implementation to report the file name and line number,
      tex: printf("Wrong parameters value: file %s on line %d\r\n", file, line) */
